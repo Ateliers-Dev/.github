@@ -77,6 +77,19 @@ export function validDispatch(payload, signature, secret) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+export async function fetchCanonicalPolicy(fetchImpl = fetch, sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetchImpl(POLICY_URL);
+    if (response.ok) return response.text();
+    if (response.status !== 503 || attempt === maxAttempts) {
+      throw new Error(`Could not read canonical policy (HTTP ${response.status})`);
+    }
+    await sleep(250 * 2 ** (attempt - 1));
+  }
+  throw new Error("Could not read canonical policy after retries");
+}
+
 async function request(token, method, path, body) {
   const response = await fetch(`${API}${path}`, {
     method,
@@ -185,6 +198,8 @@ function parseArgs(argv) {
 
 export async function run(argv = process.argv.slice(2), env = process.env) {
   const options = parseArgs(argv);
+  const target = normalizeTarget(options.repository);
+  options.repository = target;
   const token = env.GITHUB_TOKEN;
   if (!token) throw new Error("A GitHub App installation token is required");
   if (options.repositoryId !== undefined) {
@@ -192,15 +207,12 @@ export async function run(argv = process.argv.slice(2), env = process.env) {
       action: "repository-created",
       organization: ORGANIZATION,
       repository_id: options.repositoryId,
-      repository_full_name: options.repository,
+      repository_full_name: target,
       delivery_id: env.DISPATCH_DELIVERY_ID,
     };
     if (!validDispatch(signedPayload, options["dispatch-signature"], env.COMMON_LABEL_DISPATCH_SECRET)) throw new Error("Repository dispatch signature is invalid");
   }
-  const policyResponse = await fetch(POLICY_URL);
-  if (!policyResponse.ok) throw new Error(`Could not read canonical policy (HTTP ${policyResponse.status})`);
-  const desired = await loadDefinition(await policyResponse.text());
-  const target = options.repository || undefined;
+  const desired = await loadDefinition(await fetchCanonicalPolicy());
   const targets = await repositories(token, target, options.repositoryId);
   let failures = 0;
   for (const repository of targets) {
@@ -232,3 +244,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exitCode = 2;
   });
 }
+
