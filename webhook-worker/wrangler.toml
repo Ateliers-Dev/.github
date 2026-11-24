@@ -1,0 +1,14 @@
+name = "ateliers-common-label-webhook"
+main = "src/index.js"
+compatibility_date = "2026-11-24"
+
+[vars]
+GITHUB_ORGANIZATION = "Ateliers-Dev"
+
+# Set the following values as Worker secrets; never commit credentials:
+# GITHUB_APP_ID
+# GITHUB_APP_INSTALLATION_ID
+# GITHUB_APP_PRIVATE_KEY
+# GITHUB_WEBHOOK_SECRET
+# DISPATCH_REPOSITORY_ID
+# DISPATCH_REPOSITORY_NAME
