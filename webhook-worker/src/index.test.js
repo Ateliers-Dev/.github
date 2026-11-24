@@ -58,7 +58,10 @@ describe("GitHub API request diagnostics", () => {
         message: "Resource not accessible by integration",
         token: secret,
         payload: { dispatch_signature: "sensitive-signature" },
-        errors: [{ resource: "Integration", field: "repository_ids", code: "invalid", message: secret }],
+        errors: [
+          { resource: "Integration", field: "repository_ids", code: "invalid", message: secret },
+          { resource: secret, field: secret, code: secret },
+        ],
       }), {
         status: 403,
         headers: { "x-github-request-id": "ABCD:1234" },
