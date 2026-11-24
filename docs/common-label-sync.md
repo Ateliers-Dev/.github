@@ -67,7 +67,7 @@ Issue の分類方針と共通ラベルの用途の正本は、[ateliers-website
 
 Wrangler コマンドはリポジトリ内の `webhook-worker` ディレクトリで実行します。Organization Webhook の Payload URL は Worker の HTTPS URL に `/github/webhook` を付けた完全な URL です。Webhook は `repository` イベントを選び、secret は `GITHUB_WEBHOOK_SECRET` と同じ値にします。Worker の `GET /health` は疎通確認用で、`{"status":"ok"}` を返します。受信イベントの重複は同期処理の冪等性で安全に処理します。
 
-設定済みと報告された通知用 GitHub App の画面項目、および Worker の health/ping とイベント到達は観測済みです。Cloudflare 上の現在のデプロイ内容と7 Secrets の個々の値、組織 Webhook URL の最終保存状態、scoped token 発行後の dispatch、GitHub Actions 側の同期成功はこの変更作業からは未検証です。
+設定済みと報告された通知用 GitHub App の画面項目、Worker への ping、Worker までのイベント到達は観測済みです。`GET /health` の個別実行と応答、Cloudflare 上の現在のデプロイ内容と7 Secrets の個々の値、組織 Webhook URL の最終保存状態、scoped token 発行後の dispatch、GitHub Actions 側の同期成功はこの変更作業からは未検証です。
 
 ### 再デプロイと障害調査
 
