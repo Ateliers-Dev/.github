@@ -36,9 +36,22 @@ Issue の分類方針と共通ラベルの用途の正本は、[ateliers-website
 - Worker の組織・リポジトリ検証は `node --test webhook-worker/src/*.test.js` で確認します。
 - GitHub API、Worker デプロイ、Organization Webhook の実資格情報を用いる接続テストは、このPRでは行いません。
 
-## 必要な設定（このPRでは未設定）
+## 実環境での検証記録（2026-11-24）
 
-本PRはコードと設定手順を追加します。GitHubラベル、GitHub Actions Secrets、GitHub App、Cloudflare Worker、組織 webhook は変更・作成・実行していません。設定完了と別途承認があるまで同期は稼働しません。
+以下は利用者が実環境で確認した観測結果です。設定画面の確認結果は利用者からの報告であり、この変更作業から GitHub App や Cloudflare の設定を独立に読み取ったものではありません。
+
+- 通知用 `Ateliers Repository Dispatcher` は `Contents: read/write`、`Metadata: read`、対象リポジトリ `.github` のみ、権限変更の承認待ちなし、Installation は停止されていない状態を画面で確認済みです。権限は拡大しません。
+- 共通ラベル同期の実行で、短縮リポジトリ名を指定した際に署名検証と対象リポジトリ検証の両方で失敗しました。
+- 全18リポジトリへの apply 再試行は成功しました。
+- Webhook の404は URL を修正して再送信した後に解消し、ping は成功しました。
+- `repository.created` は Worker まで到達し、署名・組織・リポジトリ検証を通過しましたが、Webhook 応答は502、内部ログでは scoped installation token 発行が403でした。
+- 403 の原因は未確定です。User-Agent の不足、App の設定、権限など、いずれも原因と断定しません。
+
+この PR は API リクエストに明示的な User-Agent と安全なエラー診断を追加し、短縮名検証と正本取得時の一時的な503を改善します。GitHub API のエラー診断は HTTP ステータス、許可された汎用エラー情報、request ID に限定し、生の応答本文・署名・JWT・トークン・秘密鍵・Webhook payload は記録しません。
+
+## 設定状態と必要な設定
+
+同期用 GitHub App、Actions Secrets、Cloudflare Worker、Organization Webhook の実環境設定をこの PR で変更しません。画面確認済みの項目、実環境で動作した項目、未検証の項目を分けて記録し、未検証の設定を完了扱いしません。
 
 ### 1. 同期用 GitHub App
 
@@ -50,12 +63,28 @@ Issue の分類方針と共通ラベルの用途の正本は、[ateliers-website
 
 新規リポジトリへの通知は Organization Webhook の `repository` イベントを使います。Worker は `repository.created` を受け取り、署名・組織・所有者・リポジトリ ID を確認してから `.github` の `repository_dispatch` API を呼びます。
 
-通知専用 GitHub App を別に作り、`Contents: write` を付与して `.github` リポジトリだけにインストールします。Worker はインストールトークンを `.github` のリポジトリ ID に限定して発行します。この App に `Issues: write` は付与しません。Worker Secrets に `GITHUB_APP_ID`、`GITHUB_APP_INSTALLATION_ID`、`GITHUB_APP_PRIVATE_KEY`、`GITHUB_WEBHOOK_SECRET`、`COMMON_LABEL_DISPATCH_SECRET`、`DISPATCH_REPOSITORY_ID`、`DISPATCH_REPOSITORY_NAME=.github` を設定します。`COMMON_LABEL_DISPATCH_SECRET` は `.github` リポジトリの Actions Secret にも同じ値を登録します。Worker はGitHub署名を検証した後、dispatch内容に共有鍵の HMAC を付けます。Actions 側は専用の guard job でHMACと組織名を確認してから、Issues:write のインストールトークンを発行します。署名のない直接dispatchは同期前に拒否します。秘密鍵・webhook secret は Git に置きません。
+通知専用 GitHub App は `Contents: read/write` と基本権限の `Metadata: read` を使い、`.github` リポジトリだけにインストールします。Worker は scoped installation token の対象を `.github` のリポジトリ ID に限定します。この App に `Issues: write` は付与しません。必要な Worker Secrets は次の7つです: `GITHUB_APP_ID`、`GITHUB_APP_INSTALLATION_ID`、`GITHUB_APP_PRIVATE_KEY`、`GITHUB_WEBHOOK_SECRET`、`COMMON_LABEL_DISPATCH_SECRET`、`DISPATCH_REPOSITORY_ID`、`DISPATCH_REPOSITORY_NAME`（値は `.github`）。`COMMON_LABEL_DISPATCH_SECRET` は `.github` リポジトリの Actions Secret にも同じ値を登録します。Worker は GitHub 署名を検証した後、dispatch 内容に共有鍵の HMAC を付けます。Actions 側は専用の guard job で HMAC と組織名を確認してから、Issues:write のインストールトークンを発行します。署名のない直接 dispatch は同期前に拒否します。秘密鍵・Webhook secret は Git に置きません。
 
-Worker を `webhook-worker` からデプロイして HTTPS URL を得た後、組織の Settings → Webhooks でその URL に `repository` イベント（secret は `GITHUB_WEBHOOK_SECRET` と同じ値）を送信する Organization Webhook を設定します。受信イベントの重複は同期処理の冪等性で安全に処理します。
+Wrangler コマンドはリポジトリ内の `webhook-worker` ディレクトリで実行します。Organization Webhook の Payload URL は Worker の HTTPS URL に `/github/webhook` を付けた完全な URL です。Webhook は `repository` イベントを選び、secret は `GITHUB_WEBHOOK_SECRET` と同じ値にします。Worker の `GET /health` は疎通確認用で、`{"status":"ok"}` を返します。受信イベントの重複は同期処理の冪等性で安全に処理します。
 
-Cloudflare アカウント、Worker のデプロイ先、GitHub App の登録権限、Organization Webhook の管理権限はこの環境から確認できませんでした。これらの実設定は未完了で、PR 作成後の組織権限・資格情報・色の確認対象です。
+設定済みと報告された通知用 GitHub App の画面項目、Worker への ping、Worker までのイベント到達は観測済みです。`GET /health` の個別実行と応答、Cloudflare 上の現在のデプロイ内容と7 Secrets の個々の値、組織 Webhook URL の最終保存状態、scoped token 発行後の dispatch、GitHub Actions 側の同期成功はこの変更作業からは未検証です。
+
+### 再デプロイと障害調査
+
+この PR のマージ後、利用者がローカルで main の最新版を取得し、次のコマンドを `webhook-worker` ディレクトリで実行します。
+
+```powershell
+git pull
+npx wrangler deploy
+npx wrangler secret list
+npx wrangler tail ateliers-common-label-webhook
+```
+
+`secret list` は名前の確認に使い、Secret の値は表示・共有しません。Worker の到達確認には `GET https://<Workerのホスト>/health` を使います。GitHub Organization の Webhooks → Recent deliveries から既存の ping または失敗した `repository` 配信を選び、`Redeliver` で再試験します。新しい試験リポジトリは作らず、既存の試験リポジトリも削除しません。
+
+再び失敗した場合は `wrangler tail` の時刻、delivery ID、HTTP status、許可された GitHub エラー情報、request ID を確認します。403 の原因をログだけで断定せず、表示されたエラー項目と request ID を添えて GitHub 側の診断に進みます。秘密鍵・JWT・token・署名・生の Webhook payload や Secret 値はログや報告に含めません。
 
 ## 今回の範囲外
 
 既存 Issue の分類・再分類、GitHub Projects への集約、Issue Type の更新、ラベルの実リポジトリへの同期は行いません。リポジトリ初期化へ広げられる配置にはしていますが、今回実装する処理は共通ラベル同期だけです。
+

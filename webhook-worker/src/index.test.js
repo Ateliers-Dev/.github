@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { signDispatch, validateRepositoryEvent } from "./index.js";
+import { githubApiRequest, signDispatch, validateRepositoryEvent } from "./index.js";
 import { validDispatch } from "../../scripts/sync_common_labels.js";
 
 const valid = {
@@ -46,6 +46,39 @@ describe("validateRepositoryEvent", () => {
       repository_full_name: repository.full_name,
       delivery_id: deliveryId,
     }, signature, secret), true);
+  });
+});
+
+describe("GitHub API request diagnostics", () => {
+  it("sets an explicit User-Agent and keeps only allowlisted error fields", async (t) => {
+    const secret = "private-token-value";
+    t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.equal(new Headers(init.headers).get("user-agent"), "Ateliers-Dev-common-label-webhook");
+      return new Response(JSON.stringify({
+        message: "Resource not accessible by integration",
+        token: secret,
+        payload: { dispatch_signature: "sensitive-signature" },
+        errors: [
+          { resource: "Integration", field: "repository_ids", code: "invalid", message: secret },
+          { resource: secret, field: secret, code: secret },
+        ],
+      }), {
+        status: 403,
+        headers: { "x-github-request-id": "ABCD:1234" },
+      });
+    });
+
+    await assert.rejects(githubApiRequest("https://api.github.com/test", { method: "POST", headers: { accept: "application/vnd.github+json" } }), (error) => {
+      assert.deepEqual(error.diagnostics, {
+        status: 403,
+        requestId: "ABCD:1234",
+        message: "Resource not accessible by integration",
+        errors: [{ resource: "Integration", field: "repository_ids", code: "invalid" }],
+      });
+      assert.equal(JSON.stringify(error.diagnostics).includes(secret), false);
+      assert.equal(JSON.stringify(error.diagnostics).includes("sensitive-signature"), false);
+      return true;
+    });
   });
 });
 

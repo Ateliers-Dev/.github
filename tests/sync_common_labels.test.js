@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { createOrReconcile, loadDefinition, normalizeTarget, planSync, policyLabels, run, validDispatch, validateRepository } from "../scripts/sync_common_labels.js";
+import { createOrReconcile, fetchCanonicalPolicy, loadDefinition, normalizeTarget, planSync, policyLabels, run, validDispatch, validateRepository } from "../scripts/sync_common_labels.js";
 
 const policy = `## 共通ラベル
 | ラベル | 用途 |
@@ -93,4 +93,66 @@ describe("repository and dispatch guards", () => {
     assert.equal(validDispatch(payload, signature, "wrong-secret"), false);
     assert.equal(validDispatch({ ...payload, organization: "Other" }, signature, secret), false);
   });
+
+  it("normalizes a signed short repository name before both dispatch and repository validation", async (t) => {
+    const secret = "test-secret";
+    const fullName = "Ateliers-Dev/new-project";
+    const deliveryId = "delivery-123";
+    const signed = { action: "repository-created", repository_id: 42, repository_full_name: fullName, delivery_id: deliveryId };
+    const signature = createHmac("sha256", secret).update(JSON.stringify([signed.action, signed.repository_id, signed.repository_full_name, signed.delivery_id])).digest("hex");
+    const requests = [];
+    const repository = { id: 42, full_name: fullName, owner: { login: "Ateliers-Dev" }, archived: false };
+    t.mock.method(globalThis, "fetch", async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith("https://raw.githubusercontent.com/")) return new Response(policy, { status: 200 });
+      if (url.endsWith("/repositories/42")) return new Response(JSON.stringify(repository), { status: 200 });
+      if (url.includes("/labels?per_page=100")) return new Response("[]", { status: 200 });
+      throw new Error(`Unexpected test request: ${url}`);
+    });
+    t.mock.method(console, "log", () => {});
+
+    await run(["--repository", "new-project", "--repository-id", "42", "--dispatch-signature", signature], {
+      GITHUB_TOKEN: "test-token",
+      COMMON_LABEL_DISPATCH_SECRET: secret,
+      DISPATCH_DELIVERY_ID: deliveryId,
+    });
+
+    assert.equal(normalizeTarget("new-project"), fullName);
+    assert.ok(requests.includes("https://api.github.com/repositories/42"));
+    assert.ok(requests.some((url) => url.includes(`/repos/${fullName}/labels?`)));
+  });
 });
+
+describe("canonical policy retrieval", () => {
+  it("retries temporary 503 responses with bounded exponential backoff", async () => {
+    const delays = [];
+    let calls = 0;
+    const text = await fetchCanonicalPolicy(async () => {
+      calls += 1;
+      return calls < 3 ? new Response("", { status: 503 }) : new Response(policy, { status: 200 });
+    }, async (milliseconds) => delays.push(milliseconds));
+    assert.equal(text, policy);
+    assert.equal(calls, 3);
+    assert.deepEqual(delays, [250, 500]);
+  });
+
+  it("fails closed after the finite 503 retry limit", async () => {
+    let calls = 0;
+    await assert.rejects(fetchCanonicalPolicy(async () => {
+      calls += 1;
+      return new Response("", { status: 503 });
+    }, async () => {}), /HTTP 503/);
+    assert.equal(calls, 3);
+  });
+
+  it("does not retry non-503 failures", async () => {
+    let calls = 0;
+    await assert.rejects(fetchCanonicalPolicy(async () => {
+      calls += 1;
+      return new Response("", { status: 404 });
+    }, async () => {}), /HTTP 404/);
+    assert.equal(calls, 1);
+  });
+});
+
