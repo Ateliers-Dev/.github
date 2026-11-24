@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { githubApiRequest, signDispatch, validateRepositoryEvent } from "./index.js";
+import { githubApiRequest, signDispatch, signIssueDispatch, validateIssueEvent, validateRepositoryEvent } from "./index.js";
 import { validDispatch } from "../../scripts/sync_common_labels.js";
 
 const valid = {
@@ -49,6 +49,36 @@ describe("validateRepositoryEvent", () => {
   });
 });
 
+describe("validateIssueEvent", () => {
+  const payload = {
+    action: "opened",
+    organization: { login: "Ateliers-Dev" },
+    repository: { id: 124, name: "new-project", full_name: "Ateliers-Dev/new-project", owner: { login: "Ateliers-Dev" } },
+    issue: { id: 456, node_id: "I_kwDO-test", number: 7, html_url: "https://github.com/Ateliers-Dev/new-project/issues/7" },
+  };
+
+  it("accepts a well-formed issue opened in an organization repository", () => {
+    assert.equal(validateIssueEvent(payload, "Ateliers-Dev"), true);
+  });
+
+  it("rejects pull requests, other organizations, mismatched URLs, and non-opened actions", () => {
+    assert.equal(validateIssueEvent({ ...payload, issue: { ...payload.issue, pull_request: { url: "https://api.github.com/pulls/7" } } }, "Ateliers-Dev"), false);
+    assert.equal(validateIssueEvent(payload, "Other-Org"), false);
+    assert.equal(validateIssueEvent({ ...payload, repository: { ...payload.repository, archived: true } }, "Ateliers-Dev"), false);
+    assert.equal(validateIssueEvent({ ...payload, issue: { ...payload.issue, html_url: "https://github.com/Ateliers-Dev/other/issues/7" } }, "Ateliers-Dev"), false);
+    assert.equal(validateIssueEvent({ ...payload, action: "reopened" }, "Ateliers-Dev"), false);
+  });
+
+  it("signs the event identity passed to the task-management workflow", async () => {
+    const secret = "test-secret";
+    const deliveryId = "issue-delivery-1";
+    const signature = await signIssueDispatch({ organization: "Ateliers-Dev", repository: payload.repository, issue: payload.issue, delivery_id: deliveryId }, secret);
+    assert.match(signature, /^[0-9a-f]{64}$/);
+    const { createHmac } = await import("node:crypto");
+    assert.equal(signature, createHmac("sha256", secret).update(JSON.stringify(["issue-opened", "Ateliers-Dev", 124, "Ateliers-Dev/new-project", 456, 7, deliveryId])).digest("hex"));
+  });
+});
+
 describe("GitHub API request diagnostics", () => {
   it("sets an explicit User-Agent and keeps only allowlisted error fields", async (t) => {
     const secret = "private-token-value";
@@ -81,4 +111,5 @@ describe("GitHub API request diagnostics", () => {
     });
   });
 });
+
 
