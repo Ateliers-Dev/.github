@@ -67,12 +67,11 @@ async function signAppJwt(env) {
   return `${unsigned}.${base64Url(new Uint8Array(signature))}`;
 }
 
-function safeErrorValue(value) {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
-  if (!/^[A-Za-z0-9_. :/-]{1,100}$/.test(normalized)) return undefined;
-  return normalized;
-}
+const SAFE_ERROR_VALUES = {
+  resource: new Set(["Installation", "Integration", "Organization", "Repository"]),
+  field: new Set(["contents", "permissions", "repository_id", "repository_ids"]),
+  code: new Set(["already_exists", "custom", "invalid", "missing", "unprocessable"]),
+};
 
 async function githubApiError(response) {
   let body;
@@ -83,8 +82,8 @@ async function githubApiError(response) {
   }
 
   const details = { status: response.status };
-  const requestId = safeErrorValue(response.headers.get("x-github-request-id"));
-  if (requestId) details.requestId = requestId;
+  const requestId = response.headers.get("x-github-request-id");
+  if (requestId && /^[A-Za-z0-9:.-]{1,100}$/.test(requestId)) details.requestId = requestId;
 
   const allowedMessages = new Set([
     "Bad credentials",
@@ -96,14 +95,16 @@ async function githubApiError(response) {
   if (allowedMessages.has(body?.message)) details.message = body.message;
 
   if (Array.isArray(body?.errors)) {
-    details.errors = body.errors.slice(0, 10).map((item) => {
-      const error = {};
-      for (const field of ["resource", "field", "code"]) {
-        const value = safeErrorValue(item?.[field]);
-        if (value) error[field] = value;
-      }
-      return error;
-    });
+    details.errors = body.errors.slice(0, 10)
+      .map((item) => {
+        const error = {};
+        for (const field of ["resource", "field", "code"]) {
+          const value = item?.[field];
+          if (SAFE_ERROR_VALUES[field].has(value)) error[field] = value;
+        }
+        return error;
+      })
+      .filter((error) => Object.keys(error).length > 0);
   }
 
   return details;
