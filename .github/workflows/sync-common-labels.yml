@@ -1,0 +1,98 @@
+name: Sync common issue labels
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sync-common-labels.yml'
+      - 'labels.json'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'webhook-worker/**'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository name or Ateliers-Dev/name; blank checks every active repository
+        required: false
+        type: string
+      dry_run:
+        description: Preview changes without writing labels
+        required: true
+        default: true
+        type: boolean
+  repository_dispatch:
+    types: [repository-created]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the proposed changes
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate definitions and guards
+        run: |
+          node --check scripts/sync_common_labels.js
+          node --check scripts/verify_repository_dispatch.js
+          node --check webhook-worker/src/index.js
+          node --test tests/*.test.js webhook-worker/src/*.test.js
+
+  guard-dispatch:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the dispatch verifier
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify signed repository-created dispatch before issuing write token
+        if: github.event_name == 'repository_dispatch'
+        env:
+          DISPATCH_REPOSITORY_ID: ${{ github.event.client_payload.repository_id }}
+          DISPATCH_REPOSITORY_FULL_NAME: ${{ github.event.client_payload.repository_full_name }}
+          DISPATCH_SIGNATURE: ${{ github.event.client_payload.dispatch_signature }}
+          DISPATCH_DELIVERY_ID: ${{ github.event.client_payload.delivery_id }}
+          COMMON_LABEL_DISPATCH_SECRET: ${{ secrets.COMMON_LABEL_DISPATCH_SECRET }}
+        run: node scripts/verify_repository_dispatch.js
+
+  synchronize:
+    needs: guard-dispatch
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the definitions
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Create a least-scope installation token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ secrets.COMMON_LABEL_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.COMMON_LABEL_SYNC_APP_PRIVATE_KEY }}
+          owner: Ateliers-Dev
+          permission-issues: write
+
+      - name: Synchronize labels
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          INPUT_REPOSITORY: ${{ inputs.repository }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DISPATCH_REPOSITORY_ID: ${{ github.event.client_payload.repository_id }}
+          DISPATCH_REPOSITORY_FULL_NAME: ${{ github.event.client_payload.repository_full_name }}
+          DISPATCH_SIGNATURE: ${{ github.event.client_payload.dispatch_signature }}
+          DISPATCH_DELIVERY_ID: ${{ github.event.client_payload.delivery_id }}
+          COMMON_LABEL_DISPATCH_SECRET: ${{ secrets.COMMON_LABEL_DISPATCH_SECRET }}
+          DISPATCH_EVENT: ${{ github.event.action }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if [ "$DISPATCH_EVENT" != "repository-created" ] || [ -z "$DISPATCH_REPOSITORY_ID" ] || [ -z "$DISPATCH_REPOSITORY_FULL_NAME" ] || [ -z "$DISPATCH_SIGNATURE" ] || [ -z "$DISPATCH_DELIVERY_ID" ]; then
+              echo "Invalid repository-created dispatch payload" >&2
+              exit 1
+            fi
+            node scripts/sync_common_labels.js --repository "$DISPATCH_REPOSITORY_FULL_NAME" --repository-id "$DISPATCH_REPOSITORY_ID" --dispatch-signature "$DISPATCH_SIGNATURE" --apply
+          elif [ "$INPUT_DRY_RUN" = "true" ]; then
+            node scripts/sync_common_labels.js --repository "$INPUT_REPOSITORY" --dry-run
+          else
+            node scripts/sync_common_labels.js --repository "$INPUT_REPOSITORY" --apply
+          fi
