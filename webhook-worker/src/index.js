@@ -1,4 +1,5 @@
 const API = "https://api.github.com";
+const USER_AGENT = "Ateliers-Dev-common-label-webhook";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -66,8 +67,63 @@ async function signAppJwt(env) {
   return `${unsigned}.${base64Url(new Uint8Array(signature))}`;
 }
 
+function safeErrorValue(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!/^[A-Za-z0-9_. :/-]{1,100}$/.test(normalized)) return undefined;
+  return normalized;
+}
+
+async function githubApiError(response) {
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+
+  const details = { status: response.status };
+  const requestId = safeErrorValue(response.headers.get("x-github-request-id"));
+  if (requestId) details.requestId = requestId;
+
+  const allowedMessages = new Set([
+    "Bad credentials",
+    "Not Found",
+    "Resource not accessible by integration",
+    "Server Error",
+    "Validation Failed",
+  ]);
+  if (allowedMessages.has(body?.message)) details.message = body.message;
+
+  if (Array.isArray(body?.errors)) {
+    details.errors = body.errors.slice(0, 10).map((item) => {
+      const error = {};
+      for (const field of ["resource", "field", "code"]) {
+        const value = safeErrorValue(item?.[field]);
+        if (value) error[field] = value;
+      }
+      return error;
+    });
+  }
+
+  return details;
+}
+
+export async function githubApiRequest(url, init) {
+  const headers = new Headers(init.headers);
+  headers.set("user-agent", USER_AGENT);
+  const response = await fetch(url, { ...init, headers });
+  if (!response.ok) {
+    const details = await githubApiError(response);
+    const error = new Error(`GitHub API request failed (${response.status})`);
+    error.diagnostics = details;
+    throw error;
+  }
+  return response;
+}
+
 async function installationToken(env, appJwt, repositoryId) {
-  const response = await fetch(`${API}/app/installations/${env.GITHUB_APP_INSTALLATION_ID}/access_tokens`, {
+  const response = await githubApiRequest(`${API}/app/installations/${env.GITHUB_APP_INSTALLATION_ID}/access_tokens`, {
     method: "POST",
     headers: {
       accept: "application/vnd.github+json",
@@ -80,7 +136,6 @@ async function installationToken(env, appJwt, repositoryId) {
       permissions: { contents: "write" },
     }),
   });
-  if (!response.ok) throw new Error(`Could not create scoped installation token (${response.status})`);
   return (await response.json()).token;
 }
 
@@ -148,7 +203,7 @@ export default {
     try {
       const appJwt = await signAppJwt(env);
       const token = await installationToken(env, appJwt, env.DISPATCH_REPOSITORY_ID);
-      const response = await fetch(`${API}/repos/${env.GITHUB_ORGANIZATION}/${env.DISPATCH_REPOSITORY_NAME}/dispatches`, {
+      const response = await githubApiRequest(`${API}/repos/${env.GITHUB_ORGANIZATION}/${env.DISPATCH_REPOSITORY_NAME}/dispatches`, {
         method: "POST",
         headers: {
           accept: "application/vnd.github+json",
@@ -172,7 +227,10 @@ export default {
       if (response.status !== 204) throw new Error(`GitHub rejected dispatch (${response.status})`);
       return json({ status: "dispatched" }, 202);
     } catch (error) {
-      console.error("repository dispatch failed", deliveryId, error instanceof Error ? error.message : "unknown error");
+      console.error("repository dispatch failed", JSON.stringify({
+        deliveryId,
+        diagnostics: error?.diagnostics ?? { errorType: error instanceof Error ? error.name : "unknown" },
+      }));
       // Do not return exception details: they can contain request context.
       return json({ error: "dispatch failed; inspect the Worker logs" }, 502);
     }
