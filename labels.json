@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "organization": "Ateliers-Dev",
+  "source_policy": "https://github.com/Ateliers-Dev/ateliers-website/blob/main/docs/development-guidelines/technical-policies/issue-classification-and-label-policy.md",
+  "labels": [
+    {"name": "accessibility", "description": "アクセシビリティの改善や対応", "color": "0075ca"},
+    {"name": "bug", "description": "不具合に関する Issue", "color": "d73a4a"},
+    {"name": "documentation", "description": "ドキュメントの追加・修正・改善", "color": "0075ca"},
+    {"name": "duplicate", "description": "既存の Issue と重複しているもの", "color": "cfd3d7"},
+    {"name": "enhancement", "description": "機能や既存の成果物の追加・改善", "color": "a2eeef"},
+    {"name": "good first issue", "description": "初めて参加する人が取り組みやすい Issue", "color": "7057ff"},
+    {"name": "help wanted", "description": "追加の協力を求める Issue", "color": "008672"},
+    {"name": "invalid", "description": "Issue として有効な報告・提案に当たらないもの", "color": "e4e669"},
+    {"name": "question", "description": "質問や追加確認を扱う Issue", "color": "d876e3"},
+    {"name": "wontfix", "description": "対応しないと決定した Issue", "color": "ffffff"}
+  ]
+}
