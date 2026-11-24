@@ -166,8 +166,32 @@ export function validateRepositoryEvent(payload, organization) {
     repository.archived !== true;
 }
 
+export function validateIssueEvent(payload, organization) {
+  const repository = payload?.repository;
+  const issue = payload?.issue;
+  return payload?.action === "opened" &&
+    payload?.organization?.login === organization &&
+    repository?.owner?.login === organization &&
+    typeof repository?.name === "string" &&
+    repository?.full_name?.toLowerCase() === `${organization}/${repository.name}`.toLowerCase() &&
+    Number.isSafeInteger(repository?.id) && repository.id > 0 &&
+    repository?.archived !== true &&
+    issue && !issue.pull_request &&
+    Number.isSafeInteger(issue.id) && issue.id > 0 &&
+    typeof issue.node_id === "string" && issue.node_id.length > 0 &&
+    Number.isSafeInteger(issue.number) && issue.number > 0 &&
+    typeof issue.html_url === "string" && issue.html_url.toLowerCase().startsWith(`https://github.com/${organization.toLowerCase()}/${repository.name.toLowerCase()}/issues/`);
+}
+
 export async function signDispatch(payload, secret) {
   const data = JSON.stringify(["repository-created", payload.repository.id, payload.repository.full_name, payload.delivery_id]);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
+  return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function signIssueDispatch(payload, secret) {
+  const data = JSON.stringify(["issue-opened", payload.organization, payload.repository.id, payload.repository.full_name, payload.issue.id, payload.issue.number, payload.delivery_id]);
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -184,7 +208,8 @@ export default {
     if (!(await validSignature(rawBody, request.headers.get("x-hub-signature-256"), env.GITHUB_WEBHOOK_SECRET))) {
       return json({ error: "invalid signature" }, 401);
     }
-    if (request.headers.get("x-github-event") !== "repository") return json({ status: "ignored" });
+    const event = request.headers.get("x-github-event");
+    if (event !== "repository" && event !== "issues") return json({ status: "ignored" });
     const deliveryId = request.headers.get("x-github-delivery");
     if (!deliveryId || deliveryId.length > 100) return json({ error: "invalid delivery id" }, 400);
 
@@ -194,7 +219,43 @@ export default {
     } catch {
       return json({ error: "invalid JSON" }, 400);
     }
-    if (payload.action !== "created") return json({ status: "ignored" });
+    if ((event === "repository" && payload.action !== "created") || (event === "issues" && payload.action !== "opened")) return json({ status: "ignored" });
+
+    if (event === "issues") {
+      if (!validateIssueEvent(payload, env.GITHUB_ORGANIZATION)) {
+        return json({ error: "issue is outside the configured organization or is invalid" }, 403);
+      }
+      const { repository, issue, organization } = payload;
+      let operation = "app-authentication";
+      try {
+        const appJwt = await signAppJwt(env);
+        operation = "installation-token";
+        const token = await installationToken(env, appJwt, env.DISPATCH_REPOSITORY_ID);
+        operation = "repository-dispatch";
+        const response = await githubApiRequest(`${API}/repos/${env.GITHUB_ORGANIZATION}/${env.DISPATCH_REPOSITORY_NAME}/dispatches`, {
+          method: "POST",
+          headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "content-type": "application/json", "x-github-api-version": "2022-11-28" },
+          body: JSON.stringify({
+            event_type: "issue-opened",
+            client_payload: {
+              organization: organization.login,
+              repository_id: repository.id,
+              repository_full_name: repository.full_name,
+              issue_id: issue.id,
+              issue_node_id: issue.node_id,
+              issue_number: issue.number,
+              delivery_id: deliveryId,
+              dispatch_signature: await signIssueDispatch({ organization: organization.login, repository, issue, delivery_id: deliveryId }, env.COMMON_LABEL_DISPATCH_SECRET),
+            },
+          }),
+        });
+        if (response.status !== 204) throw new Error(`GitHub rejected dispatch (${response.status})`);
+        return json({ status: "dispatched" }, 202);
+      } catch (error) {
+        console.error("issue dispatch failed", JSON.stringify({ deliveryId, operation, diagnostics: error?.diagnostics ?? { errorType: error instanceof Error ? error.name : "unknown" } }));
+        return json({ error: "dispatch failed; inspect the Worker logs" }, 502);
+      }
+    }
 
     if (!validateRepositoryEvent(payload, env.GITHUB_ORGANIZATION)) {
       return json({ error: "repository is outside the configured organization or is invalid" }, 403);
@@ -241,4 +302,5 @@ export default {
     }
   },
 };
+
 

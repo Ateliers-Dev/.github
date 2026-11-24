@@ -1,0 +1,107 @@
+name: Sync Ateliers Task Management project
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sync-task-management.yml'
+      - 'scripts/verify_issue_dispatch.js'
+      - 'scripts/task_management_guards.js'
+      - 'scripts/sync_task_management.js'
+      - 'tests/**'
+      - 'webhook-worker/**'
+  repository_dispatch:
+    types: [issue-opened]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Audit for missing open issues or import them into the project
+        required: true
+        type: choice
+        options:
+          - audit-open-issues
+          - import-open-issues
+        default: audit-open-issues
+      dry_run:
+        description: Preview an import without adding items
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate scripts
+        run: |
+          node --check scripts/verify_issue_dispatch.js
+          node --check scripts/task_management_guards.js
+          node --check scripts/sync_task_management.js
+          node --check webhook-worker/src/index.js
+          node --test tests/*.test.js webhook-worker/src/*.test.js
+
+  add-issue:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify signed issue dispatch before minting project token
+        env:
+          DISPATCH_ORGANIZATION: ${{ github.event.client_payload.organization }}
+          DISPATCH_REPOSITORY_ID: ${{ github.event.client_payload.repository_id }}
+          DISPATCH_REPOSITORY_FULL_NAME: ${{ github.event.client_payload.repository_full_name }}
+          DISPATCH_ISSUE_ID: ${{ github.event.client_payload.issue_id }}
+          DISPATCH_ISSUE_NODE_ID: ${{ github.event.client_payload.issue_node_id }}
+          DISPATCH_ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          DISPATCH_DELIVERY_ID: ${{ github.event.client_payload.delivery_id }}
+          DISPATCH_SIGNATURE: ${{ github.event.client_payload.dispatch_signature }}
+          COMMON_LABEL_DISPATCH_SECRET: ${{ secrets.COMMON_LABEL_DISPATCH_SECRET }}
+        run: node scripts/verify_issue_dispatch.js
+      - name: Create an organization-wide least-permission task manager token
+        id: task-manager-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.TASK_MANAGER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TASK_MANAGER_APP_PRIVATE_KEY }}
+          owner: Ateliers-Dev
+          permission-issues: read
+          permission-metadata: read
+          permission-organization-projects: write
+      - name: Validate current issue and add it to the project
+        env:
+          TASK_MANAGER_TOKEN: ${{ steps.task-manager-token.outputs.token }}
+          TASK_SYNC_MODE: event
+          TASK_SYNC_DRY_RUN: 'false'
+          DISPATCH_REPOSITORY_ID: ${{ github.event.client_payload.repository_id }}
+          DISPATCH_REPOSITORY_FULL_NAME: ${{ github.event.client_payload.repository_full_name }}
+          DISPATCH_ISSUE_ID: ${{ github.event.client_payload.issue_id }}
+          DISPATCH_ISSUE_NODE_ID: ${{ github.event.client_payload.issue_node_id }}
+          DISPATCH_ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+        run: node scripts/sync_task_management.js
+
+  manual-sync:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Create an organization-wide least-permission task manager token
+        id: task-manager-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.TASK_MANAGER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TASK_MANAGER_APP_PRIVATE_KEY }}
+          owner: Ateliers-Dev
+          permission-issues: read
+          permission-metadata: read
+          permission-organization-projects: write
+      - name: Audit or import open issues
+        env:
+          TASK_MANAGER_TOKEN: ${{ steps.task-manager-token.outputs.token }}
+          TASK_SYNC_MODE: ${{ inputs.mode }}
+          TASK_SYNC_DRY_RUN: ${{ inputs.dry_run }}
+        run: node scripts/sync_task_management.js
+
