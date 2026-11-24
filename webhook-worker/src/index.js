@@ -201,9 +201,12 @@ export default {
     }
     const repository = payload.repository;
 
+    let operation = "app-authentication";
     try {
       const appJwt = await signAppJwt(env);
+      operation = "installation-token";
       const token = await installationToken(env, appJwt, env.DISPATCH_REPOSITORY_ID);
+      operation = "repository-dispatch";
       const response = await githubApiRequest(`${API}/repos/${env.GITHUB_ORGANIZATION}/${env.DISPATCH_REPOSITORY_NAME}/dispatches`, {
         method: "POST",
         headers: {
@@ -230,6 +233,7 @@ export default {
     } catch (error) {
       console.error("repository dispatch failed", JSON.stringify({
         deliveryId,
+        operation,
         diagnostics: error?.diagnostics ?? { errorType: error instanceof Error ? error.name : "unknown" },
       }));
       // Do not return exception details: they can contain request context.
