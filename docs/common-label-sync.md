@@ -12,6 +12,22 @@
 
 この仕組みは、決定的なラベル同期を行うもので、Issue Type の変更や Issue へのラベル付け、既存ラベルの削除はしません。Issue Type とラベルは併用でき、該当する共通ラベルがない Issue も許容します。
 
+## App・Secret・Worker設定の参照
+
+GitHub App の設定と Secret は、それぞれの実行責務に分けます。以下は設定名と必要権限の参照情報です。Secret の値・秘密鍵・Webhook secret は文書やログに記録しません。
+
+- 同期用 GitHub App: Ateliers-Dev の対象リポジトリにインストールし、Repository permission は Issues: write と GitHub App 基本権限の Metadata: read に限ります。Webhook event の購読は不要です。.github の Actions Secrets は COMMON_LABEL_SYNC_APP_CLIENT_ID と COMMON_LABEL_SYNC_APP_PRIVATE_KEY です。
+- 通知用 GitHub App: .github リポジトリだけにインストールし、Contents: read/write と Metadata: read を使います。Worker が発行する installation token の対象も .github の Repository ID に限定します。Issues: write は付与しません。
+- Worker の Secret 名: GITHUB_APP_ID、GITHUB_APP_INSTALLATION_ID、GITHUB_APP_PRIVATE_KEY、GITHUB_WEBHOOK_SECRET、COMMON_LABEL_DISPATCH_SECRET、DISPATCH_REPOSITORY_ID、DISPATCH_REPOSITORY_NAME（設定値は .github）。Organization Webhook の secret は GITHUB_WEBHOOK_SECRET と同じ値にします。COMMON_LABEL_DISPATCH_SECRET は Worker と .github の Actions Secrets の両方に設定します。
+- Webhook の Payload URL は Worker の HTTPS URL に /github/webhook を付けたものです。購読するイベントは repository です。Worker の GET /health は疎通確認用です。
+
+Worker を再デプロイする場合は、最新版を取得してから webhook-worker ディレクトリで実行します。secret list は名前だけを確認し、値を出力・共有しません。
+
+    git pull
+    npx wrangler deploy
+    npx wrangler secret list
+    npx wrangler tail ateliers-common-label-webhook
+
 ## ラベル同期の監視・確認手順
 
 ### 実行方式と定期監視
@@ -112,5 +128,8 @@ Worker の診断ログには処理段階、HTTP status、許可された汎用�
 現時点では実装と本運用文書を .github に置きます。将来、Ateliers全体の運用方針やタスク管理の記録を集約する段階で、運用文書を共通ワークスペース ateliers-workspace に移す案を再検討します。
 
 文書の所有責務と実行基盤の配置は別の判断です。文書だけを移管しても、Worker・Actions・GitHub Apps が自動的に移るわけではありません。実装を移す場合は、Webhookの受け口、Secretの保管、App権限、デプロイ、障害対応、責任者を別途評価し、移行計画と切替手順を決めます。今回、実装配置や実行基盤の移行は行っていません。
+
+
+
 
 
