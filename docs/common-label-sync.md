@@ -1,90 +1,116 @@
-# Ateliers-Dev 共通ラベル同期
+# Ateliers-Dev 共通ラベル同期の運用と検証記録
 
 > 作成日: 2026-11-24  
 > 更新日: 2026-11-24  
 > 作成者: Codex
 
-## 正本と同期定義
+## 目的と配置
 
-Issue の分類方針と共通ラベルの用途の正本は、[ateliers-website の Issue Type と共通ラベル運用方針](https://github.com/Ateliers-Dev/ateliers-website/blob/main/docs/development-guidelines/technical-policies/issue-classification-and-label-policy.md)です。このリポジトリの [`labels.json`](../labels.json) は同期に必要な名前・説明・色を機械可読にしたものです。同期前に正本の「共通ラベル」表を取得し、名前と説明が一致しなければ処理を失敗させます。色は運用設定値として本PRで提案しています。
+この文書は、Ateliers-Dev の共通ラベル同期について、日常の確認・変更手順、これまでの技術検証、将来の活用候補をまとめます。現時点の実装と運用文書は [Ateliers-Dev/.github](https://github.com/Ateliers-Dev/.github) に置きます。
 
-| ラベル | 説明 | 色 |
-| --- | --- | --- |
-| `accessibility` | アクセシビリティの改善や対応 | `0075ca` |
-| `bug` | 不具合に関する Issue | `d73a4a` |
-| `documentation` | ドキュメントの追加・修正・改善 | `0075ca` |
-| `duplicate` | 既存の Issue と重複しているもの | `cfd3d7` |
-| `enhancement` | 機能や既存の成果物の追加・改善 | `a2eeef` |
-| `good first issue` | 初めて参加する人が取り組みやすい Issue | `7057ff` |
-| `help wanted` | 追加の協力を求める Issue | `008672` |
-| `invalid` | Issue として有効な報告・提案に当たらないもの | `e4e669` |
-| `question` | 質問や追加確認を扱う Issue | `d876e3` |
-| `wontfix` | 対応しないと決定した Issue | `ffffff` |
+ラベルの意味と Issue Type との使い分けの正本は、[ateliers-website の Issue Type と共通ラベル運用方針](https://github.com/Ateliers-Dev/ateliers-website/blob/main/docs/development-guidelines/technical-policies/issue-classification-and-label-policy.md)です。.github/labels.json は同期用の機械可読定義で、正本にある共通ラベルの名前・説明と一致する必要があります。色は labels.json で管理します。同期スクリプトは実行時に正本を読み、名前と説明の不一致をエラーにします。文書作成時には正本のURLと実装上の照合方法を確認しましたが、GitHubの取得口から正本文面を直接取得できなかったため、本文の独立した再照合は未確認です。
 
-## 実行方法
+この仕組みは、決定的なラベル同期を行うもので、Issue Type の変更や Issue へのラベル付け、既存ラベルの削除はしません。Issue Type とラベルは併用でき、該当する共通ラベルがない Issue も許容します。
 
-- 定期実行は設定しません。
-- `workflow_dispatch` は1つのリポジトリまたは組織内すべての有効なリポジトリを指定できます。dry-run が既定値です。実際に反映するには手動で dry-run を解除します。
-- `repository_dispatch` の `repository-created` は、組織 webhook 受信処理が検証済みの新規リポジトリ ID と正式名を渡し、その1リポジトリだけを同期します。write 権限のトークン発行前に共有鍵の HMAC を確認します。
-- 既存ラベルの名前・説明・色を定義に合わせて追加・更新します。定義にないラベルは削除せず、Issue へのラベル付けや付け替えもしません。
-- Issue Type とラベルの併用、該当するラベルがない Issue はそのまま許容します。
-- 同時に同じラベルを作成する実行があっても、競合後に現在値を読み直して定義へ合わせます。イベント実行をまとめてキャンセルする同時実行グループは設けません。その他のAPIエラーで同期が部分的に終わる場合は、ログの失敗リポジトリを確認して再実行してください。同期操作は冪等なので、再実行で不足や差異だけを処理します。
+## ラベル同期の監視・確認手順
 
-## テスト
+### 実行方式と定期監視
 
-- 共通ラベルの名前・説明が方針文書と一致すること、同期計画が既存の独自ラベルを変更・削除しないことを `node --test tests/*.test.js` で確認します。
-- Worker の組織・リポジトリ検証は `node --test webhook-worker/src/*.test.js` で確認します。
-- GitHub API、Worker デプロイ、Organization Webhook の実資格情報を用いる接続テストは、このPRでは行いません。
+同期は GitHub Actions の手動実行、または新規リポジトリ作成イベントによる実行です。定期実行や常時巡回による監視は導入していません。必要なときに次の確認を行います。
 
-## 実環境での検証記録（2026-11-24）
+- 既存リポジトリの状態確認・同期: Actions の workflow_dispatch
+- 新規リポジトリ: Organization Webhook → Cloudflare Worker → repository_dispatch → Actions
 
-以下は利用者が実環境で確認した観測結果です。設定画面の確認結果は利用者からの報告であり、この変更作業から GitHub App や Cloudflare の設定を独立に読み取ったものではありません。
+### 全リポジトリの dry-run
 
-- 通知用 `Ateliers Repository Dispatcher` は `Contents: read/write`、`Metadata: read`、対象リポジトリ `.github` のみ、権限変更の承認待ちなし、Installation は停止されていない状態を画面で確認済みです。権限は拡大しません。
-- 共通ラベル同期の実行で、短縮リポジトリ名を指定した際に署名検証と対象リポジトリ検証の両方で失敗しました。
-- 全18リポジトリへの apply 再試行は成功しました。
-- Webhook の404は URL を修正して再送信した後に解消し、ping は成功しました。
-- `repository.created` は Worker まで到達し、署名・組織・リポジトリ検証を通過しましたが、Webhook 応答は502、内部ログでは scoped installation token 発行が403でした。
-- 403 の原因は未確定です。User-Agent の不足、App の設定、権限など、いずれも原因と断定しません。
+1. .github リポジトリの **Actions** を開き、**Sync common issue labels** ワークフローを選びます。
+2. **Run workflow** を開き、repository は空欄、dry_run は true のまま実行します。
+3. 実行された workflow run の synchronize job を開き、各リポジトリの would create / would update / already synchronized と最後の確認件数・モードを確認します。
+4. 対象外のリポジトリや想定外の変更が出た場合は apply せず、正本と labels.json、実行入力を確認します。
 
-この PR は API リクエストに明示的な User-Agent と安全なエラー診断を追加し、短縮名検証と正本取得時の一時的な503を改善します。GitHub API のエラー診断は HTTP ステータス、許可された汎用エラー情報、request ID に限定し、生の応答本文・署名・JWT・トークン・秘密鍵・Webhook payload は記録しません。
+全体実行は、同期用 App が参照できる Ateliers-Dev の有効な（アーカイブされていない）リポジトリを対象にします。
 
-## 設定状態と必要な設定
+### 個別リポジトリの dry-run
 
-同期用 GitHub App、Actions Secrets、Cloudflare Worker、Organization Webhook の実環境設定をこの PR で変更しません。画面確認済みの項目、実環境で動作した項目、未検証の項目を分けて記録し、未検証の設定を完了扱いしません。
+同じ **Run workflow** で repository にリポジトリ名（例: ateliers-website）または Ateliers-Dev/リポジトリ名 を指定し、dry_run を true にして実行します。変更内容と対象を確認してから apply に進みます。ワークフローのPR検証は同期処理を行わず、手動実行の dry-run と apply は別の実行です。
 
-### 1. 同期用 GitHub App
+### Actions のログ確認
 
-組織 `Ateliers-Dev` に同期専用 GitHub App を作成し、Repository permissions は `Issues: write` のみを付与して全組織リポジトリにインストールします。`Metadata: read` は GitHub App の基本権限です。Webhook event の購読は不要です。GitHub App の Client ID と秘密鍵を `.github` リポジトリの Actions Secrets `COMMON_LABEL_SYNC_APP_CLIENT_ID` と `COMMON_LABEL_SYNC_APP_PRIVATE_KEY` に登録します。
+対象 run の結論と各 job を確認します。
 
-この App はラベル API だけに使います。Actions のトークン作成ステップは同期ワークフロー内で短期インストールトークンを発行し、`Issues: write` だけを要求します。既存の Ateliers-Dev 向け GitHub App インストールは確認できましたが、Codex 用の接続であり、制御する webhook endpoint やこの用途の資格情報として利用できないため流用しません。
+- guard-dispatch: Webhook 由来のイベントでは、書き込みトークン発行前に共有鍵による HMAC を検証します。
+- synchronize: 対象、dry-run/apply の別、各ラベルの追加・更新または同期済み表示、最後の確認件数を確認します。
+- 失敗したリポジトリがあれば、ログに出た名前とエラーを記録し、そのリポジトリだけを指定して dry-run から再確認します。同期は冪等なので、不足や差異を修正して再実行できます。
 
-### 2. 新規リポジトリ通知用 Worker と GitHub App
+ログや共有する報告に、秘密鍵、JWT、installation token、Webhook署名、Secretの値、生のWebhook payloadを含めないでください。
 
-新規リポジトリへの通知は Organization Webhook の `repository` イベントを使います。Worker は `repository.created` を受け取り、署名・組織・所有者・リポジトリ ID を確認してから `.github` の `repository_dispatch` API を呼びます。
+### Organization Webhook と Worker の確認・再送信
 
-通知専用 GitHub App は `Contents: read/write` と基本権限の `Metadata: read` を使い、`.github` リポジトリだけにインストールします。Worker は scoped installation token の対象を `.github` のリポジトリ ID に限定します。この App に `Issues: write` は付与しません。必要な Worker Secrets は次の7つです: `GITHUB_APP_ID`、`GITHUB_APP_INSTALLATION_ID`、`GITHUB_APP_PRIVATE_KEY`、`GITHUB_WEBHOOK_SECRET`、`COMMON_LABEL_DISPATCH_SECRET`、`DISPATCH_REPOSITORY_ID`、`DISPATCH_REPOSITORY_NAME`（値は `.github`）。`COMMON_LABEL_DISPATCH_SECRET` は `.github` リポジトリの Actions Secret にも同じ値を登録します。Worker は GitHub 署名を検証した後、dispatch 内容に共有鍵の HMAC を付けます。Actions 側は専用の guard job で HMAC と組織名を確認してから、Issues:write のインストールトークンを発行します。署名のない直接 dispatch は同期前に拒否します。秘密鍵・Webhook secret は Git に置きません。
+Organization Webhook の配信履歴は、GitHub の **Organization Settings → Webhooks → 対象Webhook → Recent deliveries** で確認します。対象イベントが repository、動作が created であること、応答 status と時刻を確認します。Worker の受信先は /github/webhook です。URLの誤りやパス不足による404では、保存済み Payload URL を確認します。
 
-Wrangler コマンドはリポジトリ内の `webhook-worker` ディレクトリで実行します。Organization Webhook の Payload URL は Worker の HTTPS URL に `/github/webhook` を付けた完全な URL です。Webhook は `repository` イベントを選び、secret は `GITHUB_WEBHOOK_SECRET` と同じ値にします。Worker の `GET /health` は疎通確認用で、`{"status":"ok"}` を返します。受信イベントの重複は同期処理の冪等性で安全に処理します。
+Worker のヘルス確認とログ監視は、Wrangler を使える端末で、リポジトリの webhook-worker ディレクトリから行います。例:
 
-設定済みと報告された通知用 GitHub App の画面項目、Worker への ping、Worker までのイベント到達は観測済みです。`GET /health` の個別実行と応答、Cloudflare 上の現在のデプロイ内容と7 Secrets の個々の値、組織 Webhook URL の最終保存状態、scoped token 発行後の dispatch、GitHub Actions 側の同期成功はこの変更作業からは未検証です。
+    Set-Location C:\Projects\GitHub\Ateliers-Dev\.github\webhook-worker
+    curl.exe -i https://ateliers-common-label-webhook.ateliers-dev.workers.dev/health
+    npx wrangler tail ateliers-common-label-webhook
 
-### 再デプロイと障害調査
+GET /health の正常応答は HTTP 200 と {"status":"ok"} です。wrangler tail を実行した状態で、Recent deliveries から失敗した既存の repository.created 配信を選び、**Redeliver** で再送信します。Worker が受理・dispatch した場合は HTTP 202 になります。その後、Worker tail の該当時刻・delivery ID と、GitHub Actions に起動した run の結果を照合し、対象リポジトリに共通ラベルが存在することを確認します。再送信は同一イベントの再処理です。必要に応じて、修正版 Worker の再デプロイ後に既存配信を再送できます。
 
-この PR のマージ後、利用者がローカルで main の最新版を取得し、次のコマンドを `webhook-worker` ディレクトリで実行します。
+Worker の診断ログには処理段階、HTTP status、許可された汎用エラー情報、GitHub request ID が含まれます。403 の原因を推測で断定せず、これらを用いて調査します。Worker の Secrets を確認する必要がある場合は npx wrangler secret list で名前だけを確認し、値を表示・共有しません。再送信が再び失敗したときは、delivery ID、時刻、status、処理段階、request ID を記録して、Webhook URL・Worker・GitHub App のインストール対象・権限・Actions run を順に切り分けます。GitHub App の権限を調査目的で拡大しないでください。
 
-```powershell
-git pull
-npx wrangler deploy
-npx wrangler secret list
-npx wrangler tail ateliers-common-label-webhook
-```
+## 共通ラベルを変更する手順
 
-`secret list` は名前の確認に使い、Secret の値は表示・共有しません。Worker の到達確認には `GET https://<Workerのホスト>/health` を使います。GitHub Organization の Webhooks → Recent deliveries から既存の ping または失敗した `repository` 配信を選び、`Redeliver` で再試験します。新しい試験リポジトリは作らず、既存の試験リポジトリも削除しません。
+1. 変更理由と Issue Type / 共通ラベル方針への影響を確認し、必要なら先に正本の変更をレビュー・マージします。正本の Issue Type 方針やラベルの意味を、同期用ファイルだけで変更しません。
+2. .github/labels.json の名前・説明を正本の「共通ラベル」表に合わせます。色は同じ項目の color に6桁の16進数（# なし）で設定し、レビューで意図を確認します。
+3. 変更をPRでレビューします。PRの Actions 検証で定義と回帰テストの結果を確認します。ラベル同期 workflow のPR検証は実ラベルを変更しません。
+4. 変更が main に入ったら、まず対象リポジトリ（必要に応じて全体）の workflow_dispatch を dry_run: true で実行し、予定内容・対象・件数を確認します。
+5. 問題がなければ同じ対象を dry_run: false で実行し、ログが成功したことを確認します。対象の GitHub リポジトリの **Issues → Labels** で共通ラベルの名前・説明・色を再確認します。
+6. 定義にないラベルは削除しません。同期は管理対象の追加・属性更新のみを行い、Issue に付いたラベルや Issue Type を変更しません。
 
-再び失敗した場合は `wrangler tail` の時刻、delivery ID、HTTP status、許可された GitHub エラー情報、request ID を確認します。403 の原因をログだけで断定せず、表示されたエラー項目と request ID を添えて GitHub 側の診断に進みます。秘密鍵・JWT・token・署名・生の Webhook payload や Secret 値はログや報告に含めません。
+正本取得の失敗や内容の不一致で同期が停止した場合は、apply を繰り返さず、正本のURL・変更のマージ状態・labels.json の内容を先に確認します。GitHub API エラーで一部リポジトリだけ失敗した場合は、失敗対象を特定し、個別 dry-run の後に再実行します。
 
-## 今回の範囲外
+## 実施したこと・検証記録
 
-既存 Issue の分類・再分類、GitHub Projects への集約、Issue Type の更新、ラベルの実リポジトリへの同期は行いません。リポジトリ初期化へ広げられる配置にはしていますが、今回実装する処理は共通ラベル同期だけです。
+以下の実環境結果は利用者から共有・確認された記録です。GitHub AppやCloudflareの管理画面を本作業から独立に再確認したものとは区別します。
+
+### 基盤と権限
+
+- [PR #4](https://github.com/Ateliers-Dev/.github/pull/4) で共通ラベル同期の基盤を追加し、既存リポジトリへの手動同期と、新規リポジトリ作成イベントからの同期経路を用意しました。
+- ラベル方針の正本を ateliers-website に置き、名前・説明を実行時に照合する構成にしました。Issue Type と共通ラベルは役割を分け、併用を許容します。
+- 同期用 GitHub App は Issues: write（GitHub App の基本権限 Metadata: read を除く）でラベルを同期します。通知用 GitHub App は .github リポジトリに対象を限定し、Contents: read/write と Metadata: read を使って dispatch を行います。両者を分離し、通知用 App に Issue 書き込み権限を与えません。
+- Organization Webhook は repository イベントを Worker に送り、Cloudflare Worker は署名・イベント・Organization・Repository を検証してから通知します。Worker と Actions の間も HMAC で dispatch を検証し、検証後に同期用の書き込みトークンを使います。
+- Actions は手動の全体・個別 dry-run/apply と、署名検証済みの新規リポジトリイベントによる個別 apply を処理します。定期実行はありません。
+
+### 実環境で見つけた問題と対応
+
+- 既存18リポジトリへの apply が成功しました。
+- 短縮リポジトリ名指定で署名検証・対象リポジトリ検証に失敗しました。PR #5 で正式名へ正規化する処理を追加しました。修正版の短縮名を実環境で再試験した結果は未確認です。
+- Webhook の404は受信URLを修正して再送信した後に解消し、ping は成功しました。
+- repository.created は Worker で署名・Organization・Repository の検証を通過しましたが、初回は Worker が502を返し、内部の installation token 発行が403となりました。403の原因は未確定です。PR #5 で両 GitHub API 呼び出しに明示的な User-Agent と、情報を制限した診断ログを追加しましたが、User-Agent追加との因果関係は確定していません。
+- 正本取得時の一時的なHTTP 503には、最大3回のバックオフ付き再試行を追加しました。再試行後も取得できない場合は同期を中止します。
+- PR #5 の回帰テストは同期テスト14件と Worker テスト6件、計20件が成功し、PR の validate workflow も成功したと報告されています。[PR #5](https://github.com/Ateliers-Dev/.github/pull/5) は main にマージ済みです。
+- 修正版 Worker の再デプロイ後、2026-11-24 18:15 JST 頃に既存の repository.created 配信を再送信して成功し、試験リポジトリに日本語の共通ラベルが反映されたことを利用者が確認しました。Worker tail では /health のGETとWebhookのPOSTが Ok と観測されました。403の原因は解明されていません。
+- 新規イベントを作成直後に再送信なしで処理した場合の初回成功、短縮名指定の実環境での再試験、試験リポジトリの削除は未確認です。試験リポジトリは削除済みと扱いません。
+
+秘密値、鍵、token、署名値はこの記録に含めません。
+
+## 将来の活用候補（未実装）
+
+今後の拡張候補を記録します。以下は決定済み計画ではなく、必要性と責任分担を検討するための案です。
+
+- **リポジトリ初期化**: 共通ラベルに加え、テンプレート、規約、標準設定の適用・不足検出。
+- **Issue / Projects の整合**: Issue Type や必須情報の確認、Projects との整合、登録漏れの検出。単純な自動追加は GitHub Projects の標準機能を先に評価します。
+- **公開方針・品質監査**: 公開範囲、レビュー記録、必要な開発文書やリポジトリ設定の適合確認と通知。
+- **PR / Release 通知**: 組織内の重要な変更を集約し、関係者へ知らせる。
+- **証跡蓄積とAIによる改善支援**: Actions・PR・Issue 等の実績を必要最小限の証跡として蓄積し、AIが傾向分析や改善案を提示する。自動変更は人の承認を含む段階設計にする。
+- **Ateliers AI Orchestrator 連携**: 判断・計画を伴う課題だけを連携し、イベント基盤からの起動、権限、監査、失敗時の扱いを別途設計する。
+
+拡張時は、GitHubの標準機能を先に評価し、決定的なルール処理とAIの判断を分離します。イベント購読と権限は用途ごとに段階的に増やし、重複イベント、再送信、順序逆転、部分失敗、再試行、冪等性、監査可能性を設計・検証してから対象を広げます。
+
+## 文書と実装の将来配置
+
+現時点では実装と本運用文書を .github に置きます。将来、Ateliers全体の運用方針やタスク管理の記録を集約する段階で、運用文書を共通ワークスペース ateliers-workspace に移す案を再検討します。
+
+文書の所有責務と実行基盤の配置は別の判断です。文書だけを移管しても、Worker・Actions・GitHub Apps が自動的に移るわけではありません。実装を移す場合は、Webhookの受け口、Secretの保管、App権限、デプロイ、障害対応、責任者を別途評価し、移行計画と切替手順を決めます。今回、実装配置や実行基盤の移行は行っていません。
+
 
